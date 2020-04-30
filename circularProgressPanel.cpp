@@ -23,14 +23,12 @@
  *@param:   fixedHeight:固定高度
  */
 CircularProgressPanel::CircularProgressPanel(QWidget *parent, int fixedWidth, int fixedHeight)
-    : QWidget(parent),innerCirclePixmap(fixedWidth,fixedHeight),
-      outerCirclePixmap(fixedWidth,fixedHeight)
+    : QWidget(parent),backgroundPixmap(fixedWidth,fixedHeight)
 {
     this->setFixedSize(fixedWidth,fixedHeight);
     //设置圆形占比
     this->setCircleRatio(0.8,0.6);
-    //初始化小圆位置与刷新位置的定时器
-    this->smallCircleCurrentAngle = OUTER_CIRCLE_INITIAL_ANGLE;
+    //初始化刷新小圆位置的定时器
     this->smallCircleTimer = new QTimer(this);
     connect(smallCircleTimer,SIGNAL(timeout()),this,SLOT(smallCircleTimerSlot()));
     //设置文本画笔与字体
@@ -59,12 +57,10 @@ void CircularProgressPanel::setCircleRatio(qreal outerCircleRatio, qreal innerCi
                              outerCircleRadius*2,outerCircleRadius*2);
     innerCircleRect = QRectF(circleCenter.x()-innerCircleRadius,circleCenter.y()-innerCircleRadius,
                              innerCircleRadius*2,innerCircleRadius*2);
-    //初始化小圆圆心
-    initSmallCircleCenter(0);
-    //绘制内圆背景图
-    drawInnerCirclePixmap();
-    //绘制外圆背景图
-    drawOuterCirclePixmap();
+    //绘制背景图
+    drawBackgroundPixmap();
+    //设置小圆圆心初始位置
+    setSmallCircleCenter(OUTER_CIRCLE_INITIAL_ANGLE);
 }
 /*
  *@brief:   设置圆形进度面板中间显示文本的属性参数
@@ -90,6 +86,19 @@ void CircularProgressPanel::setText(const QString &text)
     update();
 }
 /*
+ *@brief:   设置小圆圆心(由外圆半径和角度计算而得)
+ *@author:  缪庆瑞
+ *@date:    2020.04.14
+ *@param:   angle:角度  以3点钟方向为0(360)度，逆时针增加
+ */
+void CircularProgressPanel::setSmallCircleCenter(int angle)
+{
+    this->smallCircleCurrentAngle = angle;
+    smallCircleCenter.setX(circleCenter.x()+outerCircleRadius*qCos(angle/180.0*M_PI));
+    smallCircleCenter.setY(circleCenter.y()-outerCircleRadius*qSin(angle/180.0*M_PI));
+    update();
+}
+/*
  *@brief:   小圆开始移动
  *@author:  缪庆瑞
  *@date:    2020.04.14
@@ -110,8 +119,7 @@ void CircularProgressPanel::smallCircleStopMove(bool returnStartPos)
     smallCircleTimer->stop();
     if(returnStartPos)
     {
-        smallCircleCurrentAngle = OUTER_CIRCLE_INITIAL_ANGLE;
-        update();
+        setSmallCircleCenter(OUTER_CIRCLE_INITIAL_ANGLE);
     }
 }
 /*
@@ -125,43 +133,31 @@ void CircularProgressPanel::paintEvent(QPaintEvent *event)
     QWidget::paintEvent(event);
     //定义painter,设置属性
     QPainter painter(this);
-    painter.setRenderHints(QPainter::Antialiasing);//反锯齿
+    painter.setRenderHint(QPainter::Antialiasing);//反锯齿
 
-    //绘制内圆背景图
-    painter.drawPixmap(this->rect(),innerCirclePixmap);
-    //绘制外圆背景图(坐标系变换，旋转外圆环) cpu占用相对较高
-    painter.save();
-    painter.setRenderHints(QPainter::SmoothPixmapTransform);//使用平滑的像素映射转换算法
-    painter.translate(circleCenter);
-    painter.rotate(-smallCircleCurrentAngle);
-    painter.translate(-circleCenter);
-    painter.drawPixmap(this->rect(),outerCirclePixmap);
-    painter.restore();
+    //绘制背景图
+    painter.drawPixmap(this->rect(),backgroundPixmap);
+    //绘制旋转的小圆
+    drawRotarySmallCircle(painter);
     //绘制文本
     painter.setPen(textPen);
     painter.setFont(textFont);//文本字体的大小无法通过画笔宽度设置，需要设置相应的字体
     painter.drawText(innerCircleRect,Qt::AlignCenter,text);
 }
 /*
- *@brief:   初始化小圆圆心(由外圆半径和角度计算而得)
- *@author:  缪庆瑞
- *@date:    2020.04.29
- *@param:   angle:角度  以3点钟方向为0(360)度，逆时针增加
- */
-void CircularProgressPanel::initSmallCircleCenter(int angle)
-{
-    smallCircleCenter.setX(circleCenter.x()+outerCircleRadius*qCos(angle/180.0*M_PI));
-    smallCircleCenter.setY(circleCenter.y()-outerCircleRadius*qSin(angle/180.0*M_PI));
-}
-/*
- *@brief:   绘制内圆背景图
+ *@brief:   绘制背景图
  * 将固定不变的图形提前绘制到pixmap中，然后在paintevent()内调用drawPixmap绘制。相较于直接
  * 在widget上绘制，可以在一定程度上降低不断刷新界面而引起的cpu高占用情况
  *@author:  缪庆瑞
  *@date:    2020.04.15
  */
-void CircularProgressPanel::drawInnerCirclePixmap()
+void CircularProgressPanel::drawBackgroundPixmap()
 {
+    /************设置画笔画刷***************/
+    //外圆(环)画笔
+    QPen outerCirclePen;
+    outerCirclePen.setColor(QColor("#098BDE"));
+    outerCirclePen.setWidthF(OUTER_CIRCLE_PEN_WIDTH);
     //内圆画笔
     QPen innerCirclePen(Qt::NoPen);
     //内圆画刷
@@ -171,51 +167,52 @@ void CircularProgressPanel::drawInnerCirclePixmap()
     linearGrad.setColorAt(0,QColor("#0CC4FA"));
     linearGrad.setColorAt(1,QColor("#0874D3"));
     QBrush innerCircleBrush(linearGrad);
-    /***********在innerCirclePixmap上绘图***************/
-    innerCirclePixmap.fill(Qt::transparent);
-    QPainter painter(&innerCirclePixmap);
+    /***********在backgroundPixmap上绘图***************/
+    backgroundPixmap.fill(Qt::transparent);
+    QPainter painter(&backgroundPixmap);
     painter.setRenderHint(QPainter::Antialiasing);//反锯齿
+    //绘制外圆(环)
+    painter.setPen(outerCirclePen);
+    painter.drawEllipse(outerCircleRect);
+    //painter.drawArc(outerCircleRect,0,5760);
     //绘制内圆
     painter.setPen(innerCirclePen);
     painter.setBrush(innerCircleBrush);
     painter.drawEllipse(innerCircleRect);
 }
 /*
- *@brief:   绘制外圆背景图(包括外圆环和小圆)
- * 将固定不变的图形提前绘制到pixmap中，然后在paintevent()内调用drawPixmap绘制。相较于直接
- * 在widget上绘制，可以在一定程度上降低不断刷新界面而引起的cpu高占用情况
+ *@brief:   绘制旋转的小圆
  *@author:  缪庆瑞
- *@date:    2020.04.29
+ *@date:    2020.04.30
+ *@param:   painter:绘图工具
  */
-void CircularProgressPanel::drawOuterCirclePixmap()
+void CircularProgressPanel::drawRotarySmallCircle(QPainter &painter)
 {
-    //外圆(环)画笔
-    QPen outerCirclePen;
+    /************设置画笔画刷***************/
+    //小圆弧画笔(以小圆为中心，在周围绘制一定长度的渐变弧)
+    QPen smallCircleArcPen;
+    smallCircleArcPen.setWidthF(OUTER_CIRCLE_PEN_WIDTH);
     QConicalGradient conicalGrad;//锥形渐变
     conicalGrad.setCenter(circleCenter);
-    conicalGrad.setAngle(0);
+    conicalGrad.setAngle(smallCircleCurrentAngle);
     conicalGrad.setColorAt(1.0, Qt::white);
-    conicalGrad.setColorAt(0.5, QColor("#098BDE"));
+    conicalGrad.setColorAt(0.9, QColor("#098BDE"));//与外圆环颜色保持一致
+    conicalGrad.setColorAt(0.1, QColor("#098BDE"));//在小圆周围显示一段渐变弧
     conicalGrad.setColorAt(0.0, Qt::white);
-    outerCirclePen.setBrush(QBrush(conicalGrad));
-    outerCirclePen.setWidthF(OUTER_CIRCLE_PEN_WIDTH);
-    //小圆画笔/画刷
+    smallCircleArcPen.setBrush(QBrush(conicalGrad));
+    //小圆画笔与画刷
     QPen smallCirclePen;
     smallCirclePen.setColor(Qt::white);
     smallCirclePen.setWidthF(2);
     QBrush smallCircleBrush = QBrush(QColor("#1CACF7"));
-    /***********在outerCirclePixmap上绘图***************/
-    outerCirclePixmap.fill(Qt::transparent);
-    QPainter painter(&outerCirclePixmap);
-    painter.setRenderHint(QPainter::Antialiasing);//反锯齿
-    //绘制外圆(环)
-    painter.setPen(outerCirclePen);
-    painter.drawArc(outerCircleRect,OUTER_CIRCLE_INITIAL_ANGLE*16,5760);
+    /************在设备widget上绘图***************/
+    //绘制小圆弧
+    painter.setPen(smallCircleArcPen);
+    painter.drawArc(outerCircleRect,(smallCircleCurrentAngle-36)*16,72*16);
     //绘制小圆
     painter.setPen(smallCirclePen);
     painter.setBrush(smallCircleBrush);
     painter.drawEllipse(smallCircleCenter,OUTER_CIRCLE_PEN_WIDTH*2,OUTER_CIRCLE_PEN_WIDTH*2);
-
 }
 /*
  *@brief:   刷新小圆位置的定时器响应槽
@@ -224,8 +221,8 @@ void CircularProgressPanel::drawOuterCirclePixmap()
  */
 void CircularProgressPanel::smallCircleTimerSlot()
 {
-    //顺时针转动 角度值减小
+    //顺时针转动
     smallCircleCurrentAngle -= OUTER_CIRCLE_ANGLE_INCREMENT;
     smallCircleCurrentAngle = smallCircleCurrentAngle < 0?360-OUTER_CIRCLE_ANGLE_INCREMENT:smallCircleCurrentAngle;
-    update();
+    setSmallCircleCenter(smallCircleCurrentAngle);
 }
